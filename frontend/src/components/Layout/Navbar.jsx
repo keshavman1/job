@@ -11,17 +11,20 @@ const NAV_HEIGHT = 72; // px - adjust if you prefer a different navbar height
 
 const Navbar = () => {
   const [show, setShow] = useState(false);
-  const { isAuthorized, setIsAuthorized, user } = useContext(Context);
+  const { isAuthorized, setIsAuthorized, user, setUser } = useContext(Context);
   const navigateTo = useNavigate();
 
   const handleLogout = async () => {
     try {
+      // call backend logout endpoint (your existing endpoint)
       await axios.get("http://localhost:4000/api/v1/user/logout", { withCredentials: true });
     } catch (err) {
       console.warn("Logout request failed:", err?.response?.data || err);
     } finally {
+      // client-side cleanup
       localStorage.removeItem("token");
-      setIsAuthorized(false);
+      if (typeof setUser === "function") setUser(null);
+      if (typeof setIsAuthorized === "function") setIsAuthorized(false);
       toast.success("Logged out");
       navigateTo("/login");
     }
@@ -31,7 +34,7 @@ const Navbar = () => {
   const navRootStyle = {
     height: `${NAV_HEIGHT}px`,
     display: "flex",
-    alignItems: "center",     // center vertically
+    alignItems: "center", // center vertically
     background: "#1b1c1d",
     color: "#fff",
   };
@@ -42,7 +45,7 @@ const Navbar = () => {
     margin: "0 auto",
     padding: "0 16px",
     display: "flex",
-    alignItems: "center",     // center vertically
+    alignItems: "center", // center vertically
     justifyContent: "space-between",
     boxSizing: "border-box",
   };
@@ -55,6 +58,9 @@ const Navbar = () => {
     margin: 0,
     padding: 0,
   };
+
+  // normalize role string if available
+  const role = user && user.role ? String(user.role).toLowerCase() : "";
 
   return (
     // apply navRootStyle at the nav level so everything inside is vertically centered
@@ -71,7 +77,7 @@ const Navbar = () => {
               fontWeight: 800,
               fontSize: "1.25rem",
               letterSpacing: 0.5,
-              lineHeight: 1, // keep centered
+              lineHeight: 1,
               display: "inline-flex",
               alignItems: "center",
             }}
@@ -82,62 +88,86 @@ const Navbar = () => {
 
         {/* Center / Links */}
         <ul className={!show ? "menu" : "show-menu menu"} style={menuStyle}>
-          <li>
-            <Link to={"/"} onClick={() => setShow(false)} style={{ color: "#fff" }}>
-              HOME
-            </Link>
-          </li>
-          <li>
-            <Link to={"/dashboard"} onClick={() => setShow(false)} style={{ color: "#fff" }}>
-              DASHBOARD
-            </Link>
-          </li>
-          <li>
-            <Link to={"/people"} onClick={() => setShow(false)} style={{ color: "#fff" }}>
-              FIND PEOPLE
-            </Link>
-          </li>
-          <li>
-            <Link to={"/job/getall"} onClick={() => setShow(false)} style={{ color: "#fff" }}>
-              ALL JOBS
-            </Link>
-          </li>
-          <li>
-            <Link to={"/applications/me"} onClick={() => setShow(false)} style={{ color: "#fff" }}>
-              {user && user.role === "Employer" ? "APPLICANT'S APPLICATIONS" : "MY APPLICATIONS"}
-            </Link>
-          </li>
+          {/* Home link removed as requested */}
 
-          {user && user.role === "Employer" ? (
+          {/* Always show Dashboard / People only when logged in */}
+          {isAuthorized ? (
             <>
               <li>
-                <Link to={"/job/post"} onClick={() => setShow(false)} style={{ color: "#fff" }}>
-                  POST NEW JOB
+                <Link to={"/dashboard"} onClick={() => setShow(false)} style={{ color: "#fff" }}>
+                  DASHBOARD
+                </Link>
+              </li>
+
+              <li>
+                <Link to={"/people"} onClick={() => setShow(false)} style={{ color: "#fff" }}>
+                  FIND PEOPLE
+                </Link>
+              </li>
+
+              {/* Show ALL JOBS only for non-employer roles */}
+              {role !== "employer" && (
+                <li>
+                  <Link to={"/job/getall"} onClick={() => setShow(false)} style={{ color: "#fff" }}>
+                    ALL JOBS
+                  </Link>
+                </li>
+              )}
+
+              <li>
+                <Link to={"/applications/me"} onClick={() => setShow(false)} style={{ color: "#fff" }}>
+                  {user && user.role === "Employer" ? "APPLICANT'S APPLICATIONS" : "MY APPLICATIONS"}
+                </Link>
+              </li>
+
+              {/* Employer specific links */}
+              {user && user.role === "Employer" ? (
+                <>
+                  <li>
+                    <Link to={"/job/post"} onClick={() => setShow(false)} style={{ color: "#fff" }}>
+                      POST NEW JOB
+                    </Link>
+                  </li>
+                  <li>
+                    <Link to={"/job/me"} onClick={() => setShow(false)} style={{ color: "#fff" }}>
+                      VIEW YOUR JOBS
+                    </Link>
+                  </li>
+                </>
+              ) : null}
+
+              {/* Logout button */}
+              <li>
+                <button
+                  onClick={handleLogout}
+                  style={{
+                    background: "transparent",
+                    border: "1px solid #fff",
+                    padding: "6px 12px",
+                    borderRadius: 6,
+                    color: "#fff",
+                    cursor: "pointer",
+                  }}
+                >
+                  LOGOUT
+                </button>
+              </li>
+            </>
+          ) : (
+            // Not authorized: show Login / Register only
+            <>
+              <li>
+                <Link to={"/login"} onClick={() => setShow(false)} style={{ color: "#fff" }}>
+                  LOGIN
                 </Link>
               </li>
               <li>
-                <Link to={"/job/me"} onClick={() => setShow(false)} style={{ color: "#fff" }}>
-                  VIEW YOUR JOBS
+                <Link to={"/register"} onClick={() => setShow(false)} style={{ color: "#fff" }}>
+                  REGISTER
                 </Link>
               </li>
             </>
-          ) : null}
-
-          <li>
-            <button
-              onClick={handleLogout}
-              style={{
-                background: "transparent",
-                border: "1px solid #fff",
-                padding: "6px 12px",
-                borderRadius: 6,
-                color: "#fff",
-                cursor: "pointer",
-              }}
-            >
-              LOGOUT
-            </button>
-          </li>
+          )}
         </ul>
 
         {/* Hamburger (mobile) */}

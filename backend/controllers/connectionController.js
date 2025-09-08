@@ -1,8 +1,16 @@
 // backend/controllers/connectionController.js
+import mongoose from "mongoose";
 import { Connection } from "../models/connectionSchema.js";
 import { catchAsyncErrors } from "../middlewares/catchAsyncError.js";
 import { User } from "../models/userSchema.js";
 import ErrorHandler from "../middlewares/error.js";
+
+/**
+ * Utility to validate ObjectId strings
+ */
+const isValidObjectId = (id) => {
+  return mongoose.isValidObjectId(id);
+};
 
 /**
  * Send a connection request from authenticated user -> :id (recipient)
@@ -11,9 +19,14 @@ export const sendRequest = catchAsyncErrors(async (req, res, next) => {
   const recipientId = req.params.id;
   const requester = req.user;
 
+  // validate IDs
   if (!requester || !requester._id) {
     return next(new ErrorHandler("Not authenticated", 401));
   }
+  if (!isValidObjectId(recipientId)) {
+    return next(new ErrorHandler("Invalid recipient id", 400));
+  }
+
   const requesterId = String(requester._id);
 
   if (requesterId === String(recipientId)) {
@@ -36,12 +49,10 @@ export const sendRequest = catchAsyncErrors(async (req, res, next) => {
   if (existing) {
     // If previously declined, allow re-sending by creating a new pending or updating status
     if (existing.status === "declined" && String(existing.requester) !== requesterId) {
-      // update requester/recipient if opposite direction (optional)
       existing.requester = requesterId;
       existing.recipient = recipientId;
       existing.status = "pending";
       await existing.save();
-      // notify recipient via socket (if any)
       const io = req.app.get("io");
       if (io) io.to(String(recipientId)).emit("connection-request", { from: requesterId, connection: existing });
       return res.status(200).json({ success: true, connection: existing, message: "Request re-sent" });
@@ -82,7 +93,10 @@ export const sendRequest = catchAsyncErrors(async (req, res, next) => {
  * List incoming pending requests for the authenticated user
  */
 export const listRequests = catchAsyncErrors(async (req, res) => {
-  const requests = await Connection.find({ recipient: req.user._id, status: "pending" })
+  const userId = req.user && req.user._id;
+  if (!userId) return res.status(401).json({ success: false, message: "Not authenticated" });
+
+  const requests = await Connection.find({ recipient: userId, status: "pending" })
     .populate("requester", "name email role skills profilePic")
     .sort({ createdAt: -1 });
 
@@ -94,8 +108,14 @@ export const listRequests = catchAsyncErrors(async (req, res) => {
  * Body: { action: "accept" | "decline" }
  */
 export const respondRequest = catchAsyncErrors(async (req, res) => {
+  const connectionId = req.params.id;
   const { action } = req.body;
-  const connection = await Connection.findById(req.params.id);
+
+  if (!isValidObjectId(connectionId)) {
+    return res.status(400).json({ success: false, message: "Invalid connection id" });
+  }
+
+  const connection = await Connection.findById(connectionId);
   if (!connection) return res.status(404).json({ success: false, message: "Request not found" });
 
   if (String(connection.recipient) !== String(req.user._id)) {
@@ -131,6 +151,10 @@ export const respondRequest = catchAsyncErrors(async (req, res) => {
 export const getStatus = catchAsyncErrors(async (req, res) => {
   const otherId = req.params.otherId;
   const meId = String(req.user._id);
+
+  if (!isValidObjectId(otherId)) {
+    return res.status(400).json({ success: false, message: "Invalid other user id" });
+  }
 
   const conn = await Connection.findOne({
     $or: [

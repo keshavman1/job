@@ -3,6 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import axios from "axios";
 import { useNavigate } from "react-router-dom";
 import { Context } from "/src/context.jsx";
+
 const JobDetails = () => {
   const { id } = useParams();
   const [job, setJob] = useState({});
@@ -16,12 +17,12 @@ const JobDetails = () => {
         withCredentials: true,
       })
       .then((res) => {
-        setJob(res.data.job);
+        setJob(res.data.job || {});
       })
       .catch((error) => {
         navigateTo("/notfound");
       });
-  }, []);
+  }, [id]);
 
   if (!isAuthorized) {
     navigateTo("/login");
@@ -51,7 +52,7 @@ const JobDetails = () => {
             Description: <span>{job.description}</span>
           </p>
           <p>
-            Job Posted On: <span>{job.jobPostedOn}</span>
+            Job Posted On: <span>{job.jobPostedOn ? new Date(job.jobPostedOn).toLocaleString() : ""}</span>
           </p>
           <p>
             Salary:{" "}
@@ -63,6 +64,16 @@ const JobDetails = () => {
               </span>
             )}
           </p>
+
+          <p>
+            Skills:{" "}
+            <span>
+              {Array.isArray(job.skills) && job.skills.length
+                ? job.skills.join(", ")
+                : (job.skills && typeof job.skills === "string" ? job.skills : "Not specified")}
+            </span>
+          </p>
+
           {user && user.role === "Employer" ? (
             <></>
           ) : (

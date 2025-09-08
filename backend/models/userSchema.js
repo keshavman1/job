@@ -52,6 +52,19 @@ const userSchema = new mongoose.Schema(
 
     // accepted connections
     connections: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
+
+    // ------- QUIZ FIELDS (new) -------
+    quizCompleted: { type: Boolean, default: false },
+    quizAnswers: {
+      // store raw answers array: [{ qId, answer }]
+      type: [{ qId: String, answer: String }],
+      default: [],
+    },
+    quizSummary: {
+      // small summary e.g. { matchCount: Number, matchedJobIds: [ObjectId], skillsSelected: [String] }
+      type: Object,
+      default: {},
+    },
   },
   { timestamps: true }
 );
