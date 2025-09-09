@@ -1,23 +1,24 @@
 // backend/controllers/quizController.js
 import fs from "fs";
 import path from "path";
+import { fileURLToPath } from "url";
 import { catchAsyncErrors } from "../middlewares/catchAsyncError.js";
 import { QuizResult } from "../models/quizSchema.js";
 import { Job } from "../models/jobSchema.js";
 import User from "../models/userSchema.js";
 
-/**
- * Helper to ensure reports folder exists
- */
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Helper: ensure reports directory under backend/uploads/reports exists and return it
 const ensureReportsFolder = () => {
-  const reportsDir = path.join(process.cwd(), "backend", "uploads", "reports");
+  // Use __dirname so path is always relative to backend/controllers and not process.cwd()
+  const reportsDir = path.join(__dirname, "..", "uploads", "reports");
   if (!fs.existsSync(reportsDir)) fs.mkdirSync(reportsDir, { recursive: true });
   return reportsDir;
 };
 
-/**
- * Generate a simple CSV report and return public URL path (served by app.js static mapping)
- */
+// CSV generator that writes to backend/uploads/reports reliably
 const generateCSVReport = async ({ user, quiz, matchedJobs }) => {
   const reportsDir = ensureReportsFolder();
   const timestamp = Date.now();
@@ -50,32 +51,26 @@ const generateCSVReport = async ({ user, quiz, matchedJobs }) => {
   const content = lines.join("\n");
   await fs.promises.writeFile(filePath, content, "utf8");
 
-  // `/static/uploads` is served by app.js -> backend/uploads
+  // Build public URL path (frontend will prefix with backend host if needed)
   const reportUrlPath = `/static/uploads/reports/${fileName}`;
+
+  // Helpful console log so you can see exactly where the file was written and the URL to fetch
+  console.log("Quiz report written:", filePath);
+  console.log("Quiz report public path:", reportUrlPath);
+
   return { filePath, reportUrlPath };
 };
 
-/**
- * Normalize incoming answers into an array of objects: [{ qId: string, answer: string }]
- * Accepts:
- *  - Array of objects
- *  - Array of strings (JSON or string answers)
- *  - JSON stringified array
- *  - Single string
- */
+// normalize incoming answers (same as you had)
 const normalizeAnswers = (raw) => {
   if (!raw) return [];
 
-  // If already an array
   if (Array.isArray(raw)) {
     const mapped = raw.map((item) => {
       if (item == null) return null;
-
       if (typeof item === "object") {
         return { qId: String(item.qId || "").trim(), answer: String(item.answer || "").trim() };
       }
-
-      // if item is string, try to JSON.parse
       if (typeof item === "string") {
         try {
           const parsed = JSON.parse(item);
@@ -83,44 +78,32 @@ const normalizeAnswers = (raw) => {
             return { qId: String(parsed.qId || "").trim(), answer: String(parsed.answer || "").trim() };
           }
         } catch (e) {
-          // fallback: treat as answer text only
           return { qId: "", answer: item.trim() };
         }
       }
-
-      // fallback to string coercion
       return { qId: "", answer: String(item).trim() };
     });
-
     return mapped.filter(Boolean);
   }
 
-  // If raw is a string: try parse as JSON array first
   if (typeof raw === "string") {
-    // Try strict JSON parse
     try {
       const parsed = JSON.parse(raw);
       return normalizeAnswers(parsed);
     } catch (e) {
-      // Try to replace single quotes with double quotes (best-effort)
       try {
         const alt = raw.replace(/'/g, '"');
         const parsed = JSON.parse(alt);
         return normalizeAnswers(parsed);
       } catch (e2) {
-        // fallback: single answer string
         return [{ qId: "", answer: raw.trim() }];
       }
     }
   }
 
-  // Unknown type -> empty
   return [];
 };
 
-/**
- * Normalize skillsSelected to array of strings
- */
 const normalizeSkills = (raw) => {
   if (!raw) return [];
   if (Array.isArray(raw)) return raw.map((s) => String(s).trim()).filter(Boolean);
@@ -129,36 +112,34 @@ const normalizeSkills = (raw) => {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) return parsed.map((s) => String(s).trim()).filter(Boolean);
     } catch {}
-    // fallback: comma-separated string
     return raw.split(",").map((s) => s.trim()).filter(Boolean);
   }
   return [];
 };
 
+// Basic normalization used for matching (lowercase, trim, remove punctuation/spaces except +)
+const normalizeForMatch = (s = "") =>
+  String(s || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9+]/g, ""); // Node.js -> nodejs, C++ -> c++
+
 /**
  * Controller: takeQuiz
- * - normalizes incoming payload
- * - creates QuizResult audit
- * - matches jobs via skills (simple $in)
- * - updates user.quizCompleted & quizSummary and persists user.skills
- * - generates CSV report and returns report URL
  */
 export const takeQuiz = catchAsyncErrors(async (req, res, next) => {
   try {
-    // Basic auth guard
     if (!req.user) {
       return res.status(401).json({ success: false, message: "Not authenticated" });
     }
 
-    // raw incoming payload (may be stringified)
     const rawAnswers = req.body.answers;
     const rawSkills = req.body.skillsSelected;
 
-    // Normalize
     const answers = normalizeAnswers(rawAnswers);
     const skillsSelected = normalizeSkills(rawSkills);
 
-    // Deduplicate answers by qId (keep first occurrence)
+    // Deduplicate answers (keep first occurrence)
     const seenQ = new Set();
     const dedupedAnswers = [];
     for (const item of answers) {
@@ -169,7 +150,6 @@ export const takeQuiz = catchAsyncErrors(async (req, res, next) => {
           dedupedAnswers.push({ qId: id, answer: item.answer || "" });
         }
       } else {
-        // no qId - dedupe by answer text
         const key = `__ans__:${item.answer || ""}`;
         if (!seenQ.has(key)) {
           seenQ.add(key);
@@ -178,48 +158,68 @@ export const takeQuiz = catchAsyncErrors(async (req, res, next) => {
       }
     }
 
-    // Create QuizResult (audit)
+    // create audit
     const qr = await QuizResult.create({
       user: req.user._id,
       answers: dedupedAnswers,
       skillsSelected,
     });
 
-    // Match jobs: simple rule - jobs not expired and any skill in skillsSelected
-    // Use case-insensitive matching by normalizing with regex as needed (Job.find with $in expects exact values),
-    // so we will match using regex OR by exact if normalized; here we use $in which works if we normalized skills stored in jobs.
-    const jobs = await Job.find({ expired: false, skills: { $in: skillsSelected } }).lean();
+    // Build normalized skill set for matching
+    const normalizedUserSkills = (skillsSelected || []).map((s) => normalizeForMatch(s)).filter(Boolean);
 
-    // Save summary information
-    qr.matchCount = jobs.length;
-    qr.matchedJobIds = jobs.map((j) => j._id);
+    // If no skills provided by frontend, try to detect from answers (best-effort)
+    if (!normalizedUserSkills.length) {
+      const detected = dedupedAnswers.map((a) => a.answer).filter(Boolean);
+      detected.forEach((d) => {
+        const n = normalizeForMatch(d);
+        if (n) normalizedUserSkills.push(n);
+      });
+    }
+
+    // Load all jobs and match by normalized skills
+    const jobsRaw = await Job.find({ expired: false }).lean();
+    const matchedJobs = jobsRaw.filter((job) => {
+      const jobSkills = Array.isArray(job.skills) ? job.skills : [];
+      const normJobSkills = jobSkills.map((s) => normalizeForMatch(s)).filter(Boolean);
+      // any intersection -> match
+      return normJobSkills.some((js) => normalizedUserSkills.includes(js));
+    });
+
+    // Save quiz summary
+    qr.matchCount = matchedJobs.length;
+    qr.matchedJobIds = matchedJobs.map((j) => j._id);
     qr.details = { matchedAt: new Date().toISOString() };
     await qr.save();
 
-    // Update user - persist selected skills into user.skills so getAllJobs can use req.user.skills
+    // persist to user
     await User.findByIdAndUpdate(
       req.user._id,
       {
         quizCompleted: true,
-        skills: skillsSelected, // persist skills for later filtering
+        skills: skillsSelected,
         quizAnswers: dedupedAnswers,
-        quizSummary: { matchCount: jobs.length, matchedJobIds: jobs.map((j) => j._id), skillsSelected },
+        quizSummary: { matchCount: matchedJobs.length, matchedJobIds: matchedJobs.map((j) => j._id), skillsSelected },
       },
       { new: true }
     );
 
-    // Generate CSV report
-    const { reportUrlPath } = await generateCSVReport({ user: req.user, quiz: qr, matchedJobs: jobs });
+    // write CSV to backend/uploads/reports (reliable path)
+    const { filePath, reportUrlPath } = await generateCSVReport({ user: req.user, quiz: qr, matchedJobs });
+
+    // log exact disk path and public URL for debugging
+    console.log("Quiz report written to (disk):", filePath);
+    console.log("Quiz report available at (public path):", reportUrlPath);
 
     return res.status(200).json({
       success: true,
       message: "Quiz submitted.",
-      matchCount: jobs.length,
-      jobs,
+      matchCount: matchedJobs.length,
+      jobs: matchedJobs,
       reportUrl: reportUrlPath,
+      skillsSelected,
     });
   } catch (err) {
-    // Log server error but return structured JSON
     console.error("takeQuiz error:", err && err.stack ? err.stack : err);
     return res.status(500).json({
       success: false,
@@ -229,7 +229,7 @@ export const takeQuiz = catchAsyncErrors(async (req, res, next) => {
 });
 
 /**
- * Controller: quizReport (fetch latest quiz and matched jobs)
+ * Controller: quizReport
  */
 export const quizReport = catchAsyncErrors(async (req, res, next) => {
   try {
@@ -238,12 +238,18 @@ export const quizReport = catchAsyncErrors(async (req, res, next) => {
     const qr = await QuizResult.findOne({ user: req.user._id }).sort({ createdAt: -1 });
     if (!qr) return res.status(200).json({ success: true, message: "No quiz taken yet.", report: null });
 
-    const jobs = await Job.find({ expired: false, skills: { $in: qr.skillsSelected } }).lean();
+    const normSkills = (qr.skillsSelected || []).map((s) => normalizeForMatch(s));
+    const jobsRaw = await Job.find({ expired: false }).lean();
+    const matchedJobs = jobsRaw.filter((job) => {
+      const jobSkills = Array.isArray(job.skills) ? job.skills : [];
+      const normJobSkills = jobSkills.map((s) => normalizeForMatch(s)).filter(Boolean);
+      return normJobSkills.some((js) => normSkills.includes(js));
+    });
 
     return res.status(200).json({
       success: true,
-      report: { matchCount: jobs.length, skills: qr.skillsSelected, matchedJobIds: jobs.map((j) => j._id) },
-      jobs,
+      report: { matchCount: matchedJobs.length, skills: qr.skillsSelected, matchedJobIds: matchedJobs.map((j) => j._id) },
+      jobs: matchedJobs,
     });
   } catch (err) {
     console.error("quizReport error:", err && err.stack ? err.stack : err);

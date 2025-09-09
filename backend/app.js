@@ -14,8 +14,12 @@ import connectionRouter from "./routes/connectionRoutes.js";
 import messageRouter from "./routes/messageRoutes.js";
 import quizRouter from "./routes/quizRoutes.js";
 import path from "path";
+import { fileURLToPath } from "url";
 
 config({ path: "./config/config.env" });
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 
@@ -31,9 +35,20 @@ app.use(cookieParser());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Serve uploads statically
-app.use("/static/uploads", express.static(path.join(process.cwd(), "backend", "uploads")));
-app.use("/static/profile-pic", express.static(path.join(process.cwd(), "backend", "profile-pic")));
+// ✅ Serve uploads statically (correct paths now)
+// Quiz reports folder
+
+// backend/app.js (add after existing static middleware)
+// Serve quiz reports (CSV)
+app.use(
+  "/static/uploads/reports",
+  express.static(path.join(__dirname, "uploads", "reports"))
+);
+
+
+
+app.use("/static/uploads", express.static(path.join(__dirname, "uploads")));
+app.use("/static/profile-pic", express.static(path.join(__dirname, "profile-pic")));
 
 // Routers
 app.use("/api/v1/user", userRouter);

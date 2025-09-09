@@ -4,11 +4,6 @@ import { Job } from "../models/jobSchema.js";
 import ErrorHandler from "../middlewares/error.js";
 
 /**
- * Utility: escape regex special chars from user-provided skill strings
- */
-const escapeRegExp = (string = "") => String(string).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
-/**
  * Helper: normalize a skills input (comma-separated string or array) into a clean array of non-empty trimmed strings
  */
 const normalizeSkillsInput = (raw) => {
@@ -28,17 +23,14 @@ const normalizeSkillsInput = (raw) => {
 /**
  * GET /api/v1/job/getall
  *
- * Query: ?skills=skill1,skill2  (comma separated, URL-encoded allowed)
- *
  * Behavior:
- * - If skills param provided: filter jobs whose `skills` array contains ANY of the provided skills,
- *   matching case-insensitively (uses regex substring matching).
- * - Else if req.user exists AND req.user.skills is a non-empty array: use req.user.skills to filter.
- * - Else: return an empty jobs array (no skills known -> no matches should be displayed).
- *
+ * - Accepts ?skills=skill1,skill2 (URL encoded) OR uses req.user.skills if present.
+ * - Normalizes requested skills and job skills to alphanumeric lowercased tokens and matches
+ *   when any requested token is a substring of any job skill token (or vice versa).
+ * - Returns matched non-expired jobs. If no skills known -> returns empty array.
  */
 export const getAllJobs = catchAsyncErrors(async (req, res, next) => {
-  // 1) Read skills from query param
+  // read skills from query param
   let skillsParam = req.query.skills;
   let skills = [];
 
@@ -46,48 +38,55 @@ export const getAllJobs = catchAsyncErrors(async (req, res, next) => {
     try {
       skillsParam = decodeURIComponent(skillsParam);
     } catch (e) {
-      // ignore decode errors and continue with raw string
+      // ignore decode errors
     }
     skills = skillsParam.split(",").map((s) => s.trim()).filter(Boolean);
   }
 
-  // 2) If no query skills, try to use authenticated user's skills (if available)
+  // fallback to req.user.skills if present
   if (skills.length === 0 && req.user && Array.isArray(req.user.skills) && req.user.skills.length > 0) {
     skills = req.user.skills.map((s) => String(s || "").trim()).filter(Boolean);
   }
 
-  // 3) If still no skills available, return empty list (do NOT return all jobs)
+  // If still no skills available, return empty list
   if (!skills || skills.length === 0) {
     console.log("[getAllJobs] no skills provided (query or user). Returning empty jobs array.");
     return res.status(200).json({ success: true, jobs: [] });
   }
 
-  // Normalize and prepare regexes for substring, case-insensitive matching
-  const normalizedSkills = skills.map((s) => String(s).toLowerCase()).filter(Boolean);
-  console.log("[getAllJobs] filtering jobs by skills:", normalizedSkills);
+  // Normalizer helper: remove non-alphanumeric chars and lowercase
+  const normalizeToken = (s = "") =>
+    String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
 
-  const regexes = normalizedSkills.map((s) => new RegExp(escapeRegExp(s), "i"));
+  // prepare normalized requested skills (deduped)
+  const requestedNorm = Array.from(new Set(skills.map((s) => normalizeToken(s)).filter(Boolean)));
+  console.log("[getAllJobs] filtering jobs by skills (normalized):", requestedNorm);
 
-  // Aggregation pipeline: unwind skills and match against regexes, then reconstruct job docs
-  const pipeline = [
-    { $match: { expired: false, skills: { $exists: true, $ne: [] } } },
-    { $unwind: "$skills" },
-    { $match: { skills: { $in: regexes } } },
-    {
-      $group: {
-        _id: "$_id",
-        doc: { $first: "$$ROOT" },
-      },
-    },
-    { $replaceRoot: { newRoot: "$doc" } },
-    { $sort: { createdAt: -1 } },
-  ];
+  // Fetch candidate jobs (non-expired with non-empty skills array)
+  const candidateJobs = await Job.find({ expired: false, skills: { $exists: true, $ne: [] } }).lean();
 
-  const jobs = await Job.aggregate(pipeline).allowDiskUse(true);
+  // Filter in JS with flexible substring rules:
+  // match if any requestedNorm is substring of any jobSkillNorm OR vice versa
+  const matched = [];
+  for (const job of candidateJobs) {
+    if (!job.skills || !Array.isArray(job.skills) || job.skills.length === 0) continue;
 
-  console.log(`[getAllJobs] matched ${jobs.length} jobs for skills=${normalizedSkills.join(",")}`);
+    // normalize each job skill
+    const jobSkillNorms = job.skills
+      .map((s) => normalizeToken(s))
+      .filter(Boolean);
 
-  return res.status(200).json({ success: true, jobs });
+    // if any requested skill intersects by substring -> include job
+    const anyMatch = requestedNorm.some((rq) =>
+      jobSkillNorms.some((js) => js.includes(rq) || rq.includes(js))
+    );
+
+    if (anyMatch) matched.push(job);
+  }
+
+  console.log(`[getAllJobs] matched ${matched.length} jobs for skills=${requestedNorm.join(",")}`);
+
+  return res.status(200).json({ success: true, jobs: matched });
 });
 
 /**
@@ -128,7 +127,7 @@ export const postJob = catchAsyncErrors(async (req, res, next) => {
     return next(new ErrorHandler("Cannot Enter Fixed and Ranged Salary together.", 400));
   }
 
-  // Process skills into an array regardless of input shape, and normalize
+  // Process skills into an array regardless of input shape, and normalize (trim)
   const processedSkills = normalizeSkillsInput(skills);
 
   // Enforce at least one skill

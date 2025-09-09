@@ -6,6 +6,7 @@ import { Context } from "/src/context.jsx";
 import "./Dashboard.css";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:4000/api/v1";
+const API_ROOT = (import.meta.env.VITE_API_ROOT || "http://localhost:4000").replace(/\/$/, "");
 
 export default function Dashboard() {
   const { user, setUser } = useContext(Context);
@@ -16,7 +17,7 @@ export default function Dashboard() {
   const [requests, setRequests] = useState([]);
   const [loadingRequests, setLoadingRequests] = useState(true);
 
-  // resume/photo file states (hold chosen file until user clicks Save)
+  // resume/photo file states
   const [resumeFile, setResumeFile] = useState(null);
   const [photoFile, setPhotoFile] = useState(null);
 
@@ -26,8 +27,24 @@ export default function Dashboard() {
   const resumeRef = useRef(null);
   const photoRef = useRef(null);
 
+  // Load authoritative user from backend on mount (so things persist across refresh)
   useEffect(() => {
     let mounted = true;
+    const fetchUser = async () => {
+      try {
+        const res = await axios.get(`${API_BASE}/user/getuser`, { withCredentials: true });
+        if (!mounted) return;
+        if (res.data?.user) {
+          setUser(res.data.user);
+          setAbout(res.data.user.about || "");
+        }
+      } catch (err) {
+        console.warn("Failed to fetch user", err?.response?.data || err.message);
+      }
+    };
+    fetchUser();
+
+    // fetch requests (your existing logic)
     const fetchRequests = async () => {
       try {
         setLoadingRequests(true);
@@ -42,9 +59,11 @@ export default function Dashboard() {
       }
     };
     fetchRequests();
+
     return () => {
       mounted = false;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleAcceptDecline = async (connId, action) => {
@@ -62,10 +81,20 @@ export default function Dashboard() {
     }
   };
 
-  const handleAboutSave = () => {
-    setUser((prev) => ({ ...(prev || {}), about }));
-    setEditingAbout(false);
-    toast.success("About updated (UI only)");
+  // Save About (persist to backend)
+  const handleAboutSave = async () => {
+    try {
+      const res = await axios.put(`${API_BASE}/user/update`, { about }, { withCredentials: true });
+      if (res.data?.user) {
+        setUser(res.data.user);
+        setAbout(res.data.user.about || "");
+      }
+      setEditingAbout(false);
+      toast.success("About updated");
+    } catch (err) {
+      console.error("Failed to save about", err);
+      toast.error(err?.response?.data?.message || "Failed to save about");
+    }
   };
 
   // ------ Resume upload flow ------
@@ -81,18 +110,21 @@ export default function Dashboard() {
       const form = new FormData();
       form.append("resume", resumeFile);
 
-      // Backend endpoint expected to accept multipart/form-data
-      const res = await axios.post(`${API_BASE}/profile/upload/resume`, form, {
+      const res = await axios.post(`${API_BASE}/user/upload/resume`, form, {
         withCredentials: true,
         headers: { "Content-Type": "multipart/form-data" },
       });
 
-      // Server should save file to uploads/resumes. Show success.
       toast.success(res.data?.message || "Resume uploaded");
       setResumeFile(null);
       if (resumeRef.current) resumeRef.current.value = "";
-      // Optionally update user with returned path if backend returns it
-      if (res.data?.user) setUser(res.data.user);
+
+      if (res.data?.user) {
+        setUser(res.data.user);
+      } else if (res.data?.resumePath) {
+        // optimistic update
+        setUser((prev) => ({ ...(prev || {}), resumePath: res.data.resumePath, resume: res.data.user?.resume || prev?.resume }));
+      }
     } catch (err) {
       console.error("Resume upload failed", err);
       toast.error(err?.response?.data?.message || "Failed to upload resume");
@@ -112,24 +144,24 @@ export default function Dashboard() {
     setUploadingPhoto(true);
     try {
       const form = new FormData();
-      form.append("photo", photoFile);
+      // backend expects field 'profilePic'
+      form.append("profilePic", photoFile);
 
-      // Backend endpoint expected to accept multipart/form-data and return new profile image path
-      const res = await axios.post(`${API_BASE}/profile/upload/photo`, form, {
+      const res = await axios.post(`${API_BASE}/user/upload/profile`, form, {
         withCredentials: true,
         headers: { "Content-Type": "multipart/form-data" },
       });
 
       toast.success(res.data?.message || "Profile photo uploaded");
 
-      // if server returns the new photo path in res.data.profilePhotoPath or res.data.user
-      if (res.data?.profilePhotoPath) {
-        setUser((prev) => ({ ...(prev || {}), profilePhotoPath: res.data.profilePhotoPath }));
-      } else if (res.data?.user) {
+      if (res.data?.user) {
         setUser(res.data.user);
+      } else if (res.data?.profilePhotoPath) {
+        // set preview
+        const fullUrl = API_ROOT + res.data.profilePhotoPath;
+        setUser((prev) => ({ ...(prev || {}), profilePhotoPath: fullUrl }));
       } else {
-        // optimistic: attempt to show preview using object URL
-        // (This will only be a temporary preview; server image path is preferred.)
+        // fallback preview using blob
         const previewUrl = URL.createObjectURL(photoFile);
         setUser((prev) => ({ ...(prev || {}), profilePhotoPath: previewUrl }));
       }
@@ -144,6 +176,13 @@ export default function Dashboard() {
     }
   };
 
+  // Helper: get absolute URL for static files (if backend returns only relative)
+  const absoluteStatic = (staticPath) => {
+    if (!staticPath) return null;
+    if (staticPath.startsWith("http")) return staticPath;
+    return API_ROOT + staticPath;
+  };
+
   return (
     <div className="dashboard-wrapper">
       <div className="dashboard-inner">
@@ -153,8 +192,7 @@ export default function Dashboard() {
             <div className="profile-left">
               <div className="avatar">
                 {user?.profilePhotoPath ? (
-                  // If profilePhotoPath is absolute or relative URL it will render
-                  <img src={user.profilePhotoPath} alt={user.name} />
+                  <img src={absoluteStatic(user.profilePhotoPath)} alt={user.name} />
                 ) : (
                   <div className="avatar-initial">{(user?.name || "U").charAt(0).toUpperCase()}</div>
                 )}
@@ -221,6 +259,22 @@ export default function Dashboard() {
                 <h3>Resume</h3>
               </div>
               <div className="card-body">
+                <div style={{ marginBottom: 10 }}>
+                  {user?.resumePath ? (
+                    <div>
+                      <div>
+                        Your resume:
+                        <a href={absoluteStatic(user.resumePath)} target="_blank" rel="noreferrer" style={{ marginLeft: 8 }}>
+                          {user.resume || "View resume"}
+                        </a>
+                      </div>
+                      <div className="muted small" style={{ marginTop: 6 }}>You can replace it by uploading new file below.</div>
+                    </div>
+                  ) : (
+                    <div className="muted small">No resume uploaded yet</div>
+                  )}
+                </div>
+
                 <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
                   <input
                     ref={resumeRef}
@@ -228,7 +282,6 @@ export default function Dashboard() {
                     accept=".pdf,.doc,.docx"
                     onChange={onResumeChosen}
                   />
-                  {/* Show Save only when a file is selected */}
                   {resumeFile ? (
                     <button
                       onClick={saveResume}
@@ -250,6 +303,10 @@ export default function Dashboard() {
                 <h3>Profile Photo</h3>
               </div>
               <div className="card-body">
+                <div style={{ marginBottom: 10 }}>
+                  <div className="muted small">Square image recommended</div>
+                </div>
+
                 <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
                   <input
                     ref={photoRef}
@@ -266,7 +323,7 @@ export default function Dashboard() {
                       {uploadingPhoto ? "Saving..." : "Save"}
                     </button>
                   ) : (
-                    <div className="muted small">Square image recommended</div>
+                    <div className="muted small">Upload to update your profile image</div>
                   )}
                 </div>
               </div>
@@ -294,7 +351,7 @@ export default function Dashboard() {
                       <div className="request-left">
                         <div className="req-avatar">
                           {r.requester?.profilePhotoPath ? (
-                            <img src={r.requester.profilePhotoPath} alt={r.requester.name} />
+                            <img src={absoluteStatic(r.requester.profilePhotoPath)} alt={r.requester.name} />
                           ) : (
                             <div className="req-initial">{(r.requester?.name || "U").charAt(0).toUpperCase()}</div>
                           )}
