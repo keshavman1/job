@@ -7,6 +7,7 @@ import {
   getSingleJob,
   postJob,
   updateJob,
+  applyToJob,
 } from "../controllers/jobController.js";
 import { isAuthenticated } from "../middlewares/auth.js";
 import { optionalAuth } from "../middlewares/optionalAuth.js"; // make sure this file exists
@@ -27,6 +28,9 @@ router.post("/post", isAuthenticated, postJob);
 router.get("/getmyjobs", isAuthenticated, getMyJobs);
 router.put("/update/:id", isAuthenticated, updateJob);
 router.delete("/delete/:id", isAuthenticated, deleteJob);
+
+// NEW: apply endpoint - users apply to a job (must be authenticated)
+router.post("/apply/:id", isAuthenticated, applyToJob);
 
 // Get single job (public)
 router.get("/:id", getSingleJob);

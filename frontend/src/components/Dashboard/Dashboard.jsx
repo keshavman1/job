@@ -17,7 +17,6 @@ export default function Dashboard() {
   const [requests, setRequests] = useState([]);
   const [loadingRequests, setLoadingRequests] = useState(true);
 
-  // resume/photo file states
   const [resumeFile, setResumeFile] = useState(null);
   const [photoFile, setPhotoFile] = useState(null);
 
@@ -27,7 +26,6 @@ export default function Dashboard() {
   const resumeRef = useRef(null);
   const photoRef = useRef(null);
 
-  // Load authoritative user from backend on mount (so things persist across refresh)
   useEffect(() => {
     let mounted = true;
     const fetchUser = async () => {
@@ -44,7 +42,6 @@ export default function Dashboard() {
     };
     fetchUser();
 
-    // fetch requests (your existing logic)
     const fetchRequests = async () => {
       try {
         setLoadingRequests(true);
@@ -63,7 +60,6 @@ export default function Dashboard() {
     return () => {
       mounted = false;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleAcceptDecline = async (connId, action) => {
@@ -81,7 +77,6 @@ export default function Dashboard() {
     }
   };
 
-  // Save About (persist to backend)
   const handleAboutSave = async () => {
     try {
       const res = await axios.put(`${API_BASE}/user/update`, { about }, { withCredentials: true });
@@ -97,7 +92,6 @@ export default function Dashboard() {
     }
   };
 
-  // ------ Resume upload flow ------
   const onResumeChosen = (e) => {
     const file = e.target.files?.[0] || null;
     setResumeFile(file);
@@ -109,7 +103,6 @@ export default function Dashboard() {
     try {
       const form = new FormData();
       form.append("resume", resumeFile);
-
       const res = await axios.post(`${API_BASE}/user/upload/resume`, form, {
         withCredentials: true,
         headers: { "Content-Type": "multipart/form-data" },
@@ -122,8 +115,7 @@ export default function Dashboard() {
       if (res.data?.user) {
         setUser(res.data.user);
       } else if (res.data?.resumePath) {
-        // optimistic update
-        setUser((prev) => ({ ...(prev || {}), resumePath: res.data.resumePath, resume: res.data.user?.resume || prev?.resume }));
+        setUser((prev) => ({ ...(prev || {}), resumePath: res.data.resumePath }));
       }
     } catch (err) {
       console.error("Resume upload failed", err);
@@ -133,7 +125,6 @@ export default function Dashboard() {
     }
   };
 
-  // ------ Photo upload flow ------
   const onPhotoChosen = (e) => {
     const file = e.target.files?.[0] || null;
     setPhotoFile(file);
@@ -144,9 +135,7 @@ export default function Dashboard() {
     setUploadingPhoto(true);
     try {
       const form = new FormData();
-      // backend expects field 'profilePic'
       form.append("profilePic", photoFile);
-
       const res = await axios.post(`${API_BASE}/user/upload/profile`, form, {
         withCredentials: true,
         headers: { "Content-Type": "multipart/form-data" },
@@ -157,11 +146,9 @@ export default function Dashboard() {
       if (res.data?.user) {
         setUser(res.data.user);
       } else if (res.data?.profilePhotoPath) {
-        // set preview
         const fullUrl = API_ROOT + res.data.profilePhotoPath;
         setUser((prev) => ({ ...(prev || {}), profilePhotoPath: fullUrl }));
       } else {
-        // fallback preview using blob
         const previewUrl = URL.createObjectURL(photoFile);
         setUser((prev) => ({ ...(prev || {}), profilePhotoPath: previewUrl }));
       }
@@ -176,207 +163,184 @@ export default function Dashboard() {
     }
   };
 
-  // Helper: get absolute URL for static files (if backend returns only relative)
   const absoluteStatic = (staticPath) => {
     if (!staticPath) return null;
     if (staticPath.startsWith("http")) return staticPath;
     return API_ROOT + staticPath;
   };
 
+  const roleShort = (name) => {
+    if (!name) return "U";
+    return name.trim().charAt(0).toUpperCase();
+  };
+
   return (
     <div className="dashboard-wrapper">
-      <div className="dashboard-inner">
-        {/* LEFT MAIN */}
-        <div className="dashboard-main">
-          <section className="profile-card">
-            <div className="profile-left">
-              <div className="avatar">
-                {user?.profilePhotoPath ? (
-                  <img src={absoluteStatic(user.profilePhotoPath)} alt={user.name} />
-                ) : (
-                  <div className="avatar-initial">{(user?.name || "U").charAt(0).toUpperCase()}</div>
-                )}
-              </div>
-            </div>
-
-            <div className="profile-center">
-              <h2 className="profile-name">{user?.name || "Your Name"}</h2>
-              <div className="profile-info-row">
-                <div className="profile-info-item">
-                  <strong>Email:</strong>
-                  <span className="muted">{user?.email || "—"}</span>
-                </div>
-                <div className="profile-info-item">
-                  <strong>Phone:</strong>
-                  <span className="muted">{user?.phone || "—"}</span>
-                </div>
-                <div className="profile-info-item">
-                  <strong>Role:</strong>
-                  <span className="muted">{user?.role || "—"}</span>
+      <div className="dashboard-inner container-fluid">
+        <div className="dashboard-grid">
+          <div className="dashboard-main">
+            <section className="profile-card card-soft">
+              <div className="profile-left">
+                <div className="avatar">
+                  {user?.profilePhotoPath ? (
+                    <img src={absoluteStatic(user.profilePhotoPath)} alt={user.name} />
+                  ) : (
+                    <div className="avatar-initial">{roleShort(user?.name)}</div>
+                  )}
                 </div>
               </div>
-            </div>
 
-            <div className="profile-right">
-              <button
-                className="btn-outline"
-                onClick={() => window.open(`/profile/${user?._id || ""}`, "_blank")}
-              >
-                View Your Public Profile
-              </button>
-            </div>
-          </section>
+              <div className="profile-center">
+                <h2 className="profile-name">{user?.name || "Your Name"}</h2>
+                <div className="profile-info-row">
+                  <div className="profile-info-item">
+                    <strong>Email:</strong>
+                    <span className="muted">{user?.email || "—"}</span>
+                  </div>
+                  <div className="profile-info-item">
+                    <strong>Phone:</strong>
+                    <span className="muted">{user?.phone || "—"}</span>
+                  </div>
+                  <div className="profile-info-item">
+                    <strong>Role:</strong>
+                    <span className="muted">{user?.role || "—"}</span>
+                  </div>
+                </div>
+              </div>
+            </section>
 
-          <section className="card about-card">
-            <div className="card-header">
-              <h3>About Me</h3>
-              <div>
+            <section className="card about-card card-soft">
+              <div className="card-header">
+                <h3>About Me</h3>
+                <div>
+                  {!editingAbout ? (
+                    <button className="btn-link" onClick={() => setEditingAbout(true)}>
+                      Edit
+                    </button>
+                  ) : (
+                    <button className="btn-primary small" onClick={handleAboutSave}>
+                      Save
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="card-body">
                 {!editingAbout ? (
-                  <button className="btn-link" onClick={() => setEditingAbout(true)}>
-                    Edit
-                  </button>
+                  <p className="about-text">{about || <span className="muted">Tell others about yourself...</span>}</p>
                 ) : (
-                  <button className="btn-link" onClick={handleAboutSave}>
-                    Save
-                  </button>
+                  <textarea className="about-input" value={about} onChange={(e) => setAbout(e.target.value)} />
                 )}
               </div>
-            </div>
+            </section>
 
-            <div className="card-body">
-              {!editingAbout ? (
-                <p className="about-text">{about || <span className="muted">Tell others about yourself...</span>}</p>
-              ) : (
-                <textarea className="about-input" value={about} onChange={(e) => setAbout(e.target.value)} />
-              )}
-            </div>
-          </section>
-
-          <section className="two-column">
-            {/* Resume card */}
-            <div className="card resume-card">
-              <div className="card-header">
-                <h3>Resume</h3>
-              </div>
-              <div className="card-body">
-                <div style={{ marginBottom: 10 }}>
-                  {user?.resumePath ? (
-                    <div>
+            <section className="two-column">
+              <div className="card resume-card card-soft">
+                <div className="card-header">
+                  <h3>Resume</h3>
+                </div>
+                <div className="card-body">
+                  <div style={{ marginBottom: 10 }}>
+                    {user?.resumePath ? (
                       <div>
-                        Your resume:
-                        <a href={absoluteStatic(user.resumePath)} target="_blank" rel="noreferrer" style={{ marginLeft: 8 }}>
-                          {user.resume || "View resume"}
-                        </a>
-                      </div>
-                      <div className="muted small" style={{ marginTop: 6 }}>You can replace it by uploading new file below.</div>
-                    </div>
-                  ) : (
-                    <div className="muted small">No resume uploaded yet</div>
-                  )}
-                </div>
-
-                <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-                  <input
-                    ref={resumeRef}
-                    type="file"
-                    accept=".pdf,.doc,.docx"
-                    onChange={onResumeChosen}
-                  />
-                  {resumeFile ? (
-                    <button
-                      onClick={saveResume}
-                      disabled={uploadingResume}
-                      className="btn-primary"
-                    >
-                      {uploadingResume ? "Saving..." : "Save"}
-                    </button>
-                  ) : (
-                    <div className="muted small">PDF or DOCX recommended</div>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {/* Photo card */}
-            <div className="card photo-card">
-              <div className="card-header">
-                <h3>Profile Photo</h3>
-              </div>
-              <div className="card-body">
-                <div style={{ marginBottom: 10 }}>
-                  <div className="muted small">Square image recommended</div>
-                </div>
-
-                <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-                  <input
-                    ref={photoRef}
-                    type="file"
-                    accept="image/*"
-                    onChange={onPhotoChosen}
-                  />
-                  {photoFile ? (
-                    <button
-                      onClick={savePhoto}
-                      disabled={uploadingPhoto}
-                      className="btn-primary"
-                    >
-                      {uploadingPhoto ? "Saving..." : "Save"}
-                    </button>
-                  ) : (
-                    <div className="muted small">Upload to update your profile image</div>
-                  )}
-                </div>
-              </div>
-            </div>
-          </section>
-        </div>
-
-        {/* RIGHT SIDEBAR */}
-        <aside className="dashboard-sidebar">
-          <section className="card connection-card">
-            <div className="card-header">
-              <h3>Connection Requests</h3>
-              <div className="header-sub">People who want to connect with you</div>
-            </div>
-
-            <div className="card-body">
-              {loadingRequests ? (
-                <div className="muted">Loading connection requests...</div>
-              ) : requests.length === 0 ? (
-                <div className="muted">No pending connection requests</div>
-              ) : (
-                <ul className="requests-list">
-                  {requests.map((r) => (
-                    <li key={r._id} className="request-item">
-                      <div className="request-left">
-                        <div className="req-avatar">
-                          {r.requester?.profilePhotoPath ? (
-                            <img src={absoluteStatic(r.requester.profilePhotoPath)} alt={r.requester.name} />
-                          ) : (
-                            <div className="req-initial">{(r.requester?.name || "U").charAt(0).toUpperCase()}</div>
-                          )}
-                        </div>
                         <div>
-                          <div className="req-name">{r.requester?.name}</div>
-                          <div className="muted small">{r.requester?.role || ""}</div>
+                          Your resume:
+                          <a href={absoluteStatic(user.resumePath)} target="_blank" rel="noreferrer" style={{ marginLeft: 8 }}>
+                            {user.resume || "View resume"}
+                          </a>
+                        </div>
+                        <div className="muted small" style={{ marginTop: 6 }}>
+                          You can replace it by uploading a new file below.
                         </div>
                       </div>
+                    ) : (
+                      <div className="muted small">No resume uploaded yet</div>
+                    )}
+                  </div>
 
-                      <div className="request-actions">
-                        <button className="btn-accept" onClick={() => handleAcceptDecline(r._id, "accept")}>
-                          Accept
-                        </button>
-                        <button className="btn-decline" onClick={() => handleAcceptDecline(r._id, "decline")}>
-                          Decline
-                        </button>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          </section>
-        </aside>
+                  <div className="upload-row">
+                    <input ref={resumeRef} type="file" accept=".pdf,.doc,.docx" onChange={onResumeChosen} />
+                    {resumeFile ? (
+                      <button onClick={saveResume} disabled={uploadingResume} className="btn-primary">
+                        {uploadingResume ? "Saving..." : "Save"}
+                      </button>
+                    ) : (
+                      <div className="muted small">PDF or DOCX recommended</div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="card photo-card card-soft">
+                <div className="card-header">
+                  <h3>Profile Photo</h3>
+                </div>
+                <div className="card-body">
+                  <div style={{ marginBottom: 10 }}>
+                    <div className="muted small">Square image recommended</div>
+                  </div>
+
+                  <div className="upload-row">
+                    <input ref={photoRef} type="file" accept="image/*" onChange={onPhotoChosen} />
+                    {photoFile ? (
+                      <button onClick={savePhoto} disabled={uploadingPhoto} className="btn-primary">
+                        {uploadingPhoto ? "Saving..." : "Save"}
+                      </button>
+                    ) : (
+                      <div className="muted small">Upload to update your profile image</div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </section>
+          </div>
+
+          <aside className="dashboard-sidebar">
+            <section className="card connection-card card-soft">
+              <div className="card-header">
+                <h3>Connection Requests</h3>
+                <div className="header-sub">People who want to connect with you</div>
+              </div>
+
+              <div className="card-body">
+                {loadingRequests ? (
+                  <div className="muted">Loading connection requests...</div>
+                ) : requests.length === 0 ? (
+                  <div className="muted">No pending connection requests</div>
+                ) : (
+                  <ul className="requests-list">
+                    {requests.map((r) => (
+                      <li key={r._id} className="request-item">
+                        <div className="request-left">
+                          <div className="req-avatar">
+                            {r.requester?.profilePhotoPath ? (
+                              <img src={absoluteStatic(r.requester.profilePhotoPath)} alt={r.requester.name} />
+                            ) : (
+                              <div className="req-initial">{roleShort(r.requester?.name)}</div>
+                            )}
+                          </div>
+                          <div>
+                            <div className="req-name">{r.requester?.name}</div>
+                            <div className="muted small">{r.requester?.role || ""}</div>
+                          </div>
+                        </div>
+
+                        <div className="request-actions">
+                          <button className="btn-accept" onClick={() => handleAcceptDecline(r._id, "accept")}>
+                            Accept
+                          </button>
+                          <button className="btn-decline" onClick={() => handleAcceptDecline(r._id, "decline")}>
+                            Decline
+                          </button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </section>
+          </aside>
+        </div>
       </div>
     </div>
   );

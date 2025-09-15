@@ -10,6 +10,12 @@ import path from "path";
  * POST /api/v1/application/post
  * Accepts multipart/form-data with optional resume file (field 'resume')
  * If resume file is provided it uses that; otherwise it falls back to user's saved resume (User.resumePath or User.resume)
+ *
+ * Enforces:
+ * - Job must exist
+ * - Job Seeker only
+ * - A job seeker can apply only once per job (checked both via Application collection and Job.applicants)
+ * - After creating Application, adds the applicant to Job.applicants via $addToSet
  */
 export const postApplication = catchAsyncErrors(async (req, res, next) => {
   const { role } = req.user;
@@ -47,23 +53,19 @@ export const postApplication = catchAsyncErrors(async (req, res, next) => {
   }
 
   // Decide resume source:
-  // 1) If a resume file was uploaded in this request (req.file) -> use it
-  // 2) Else, fall back to user's saved dashboard resume (User.resumePath or User.resume)
   let resumeUrl = null;
   let originalName = null;
 
   if (req.file) {
-    // multer provided file; filename should be available
     const filename = req.file.filename || path.basename(req.file.path || "");
     // public static route in app.js: app.use("/static/uploads", express.static(path.join(process.cwd(), "backend", "uploads")));
     resumeUrl = `/static/uploads/resumes/${filename}`;
     originalName = req.file.originalname || filename;
   } else {
-    // No file uploaded with this request -> try to read user's saved resume path
     const user = await User.findById(req.user._id).lean();
     if (user && (user.resumePath || user.resume)) {
       if (user.resumePath) {
-        resumeUrl = user.resumePath; // should already be /static/...
+        resumeUrl = user.resumePath;
       } else if (user.resume) {
         resumeUrl = `/static/uploads/resumes/${user.resume}`;
       }
@@ -81,27 +83,70 @@ export const postApplication = catchAsyncErrors(async (req, res, next) => {
     );
   }
 
-  // Create application record; store resume.url as public static path that frontend can render
-  const application = await Application.create({
-    name,
-    email,
-    coverLetter,
-    phone,
-    address,
-    applicantID,
-    employerID,
-    resume: {
-      public_id: null,
-      url: resumeUrl,
-      originalName: originalName || null,
-    },
-  });
+  // --- NEW: Prevent duplicate apply ---
+  // 1) Check existing Application record for this user+job
+  const existingApplication = await Application.findOne({
+    "applicantID.user": req.user._id,
+    job: jobId,
+  }).lean();
 
-  res.status(200).json({
-    success: true,
-    message: "Application Submitted!",
-    application,
-  });
+  if (existingApplication) {
+    return res.status(400).json({
+      success: false,
+      message: "You have already applied to this job.",
+    });
+  }
+
+  // 2) Also quickly check Job.applicants array (if jobDetails has it) to be extra safe
+  if (Array.isArray(jobDetails.applicants)) {
+    const alreadyInApplicants = jobDetails.applicants.some((a) =>
+      String(a) === String(req.user._id)
+    );
+    if (alreadyInApplicants) {
+      return res.status(400).json({
+        success: false,
+        message: "You have already applied to this job.",
+      });
+    }
+  }
+
+  // Create application record; store resume.url as public static path that frontend can render
+  try {
+    const application = await Application.create({
+      name,
+      email,
+      coverLetter,
+      phone,
+      address,
+      applicantID,
+      employerID,
+      job: jobId,
+      resume: {
+        public_id: null,
+        url: resumeUrl,
+        originalName: originalName || null,
+      },
+    });
+
+    // Also update Job.applicants using $addToSet to avoid duplicates
+    await Job.findByIdAndUpdate(jobId, { $addToSet: { applicants: req.user._id } });
+
+    return res.status(200).json({
+      success: true,
+      message: "Application Submitted!",
+      application,
+    });
+  } catch (err) {
+    // Handle duplicate-key errors (in case race condition happened and DB unique index fired)
+    if (err && err.code === 11000) {
+      return res.status(400).json({
+        success: false,
+        message: "You have already applied to this job.",
+      });
+    }
+    // otherwise rethrow so catchAsyncErrors middleware forwards it
+    throw err;
+  }
 });
 
 /* ---------- other existing controller exports (preserved) ---------- */
@@ -152,6 +197,13 @@ export const jobseekerDeleteApplication = catchAsyncErrors(
     const application = await Application.findById(id);
     if (!application) {
       return next(new ErrorHandler("Application not found!", 404));
+    }
+    // Also remove user from Job.applicants (best-effort)
+    try {
+      await Job.findByIdAndUpdate(application.job, { $pull: { applicants: application.applicantID.user } });
+    } catch (e) {
+      // ignore DB cleanup errors here
+      console.warn("[jobseekerDeleteApplication] failed to cleanup job applicants:", e);
     }
     await application.deleteOne();
     res.status(200).json({

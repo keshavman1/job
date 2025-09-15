@@ -1,6 +1,7 @@
 // backend/controllers/jobController.js
 import { catchAsyncErrors } from "../middlewares/catchAsyncError.js";
 import { Job } from "../models/jobSchema.js";
+import { Application } from "../models/applicationSchema.js";
 import ErrorHandler from "../middlewares/error.js";
 
 /**
@@ -23,76 +24,79 @@ const normalizeSkillsInput = (raw) => {
 /**
  * GET /api/v1/job/getall
  *
- * Behavior:
- * - Accepts ?skills=skill1,skill2 (URL encoded) OR uses req.user.skills if present.
- * - Normalizes requested skills and job skills to alphanumeric lowercased tokens and matches
- *   when any requested token is a substring of any job skill token (or vice versa).
- * - Returns matched non-expired jobs. If no skills known -> returns empty array.
+ * - Filters jobs by skills
+ * - Only returns jobs that are within their active startDate/endDate window
+ * - Excludes expired jobs
+ * - Excludes jobs already applied to by the current job seeker
  */
 export const getAllJobs = catchAsyncErrors(async (req, res, next) => {
-  // read skills from query param
   let skillsParam = req.query.skills;
   let skills = [];
 
   if (typeof skillsParam === "string" && skillsParam.trim().length > 0) {
     try {
       skillsParam = decodeURIComponent(skillsParam);
-    } catch (e) {
-      // ignore decode errors
-    }
+    } catch (e) {}
     skills = skillsParam.split(",").map((s) => s.trim()).filter(Boolean);
   }
 
-  // fallback to req.user.skills if present
   if (skills.length === 0 && req.user && Array.isArray(req.user.skills) && req.user.skills.length > 0) {
     skills = req.user.skills.map((s) => String(s || "").trim()).filter(Boolean);
   }
 
-  // If still no skills available, return empty list
   if (!skills || skills.length === 0) {
-    console.log("[getAllJobs] no skills provided (query or user). Returning empty jobs array.");
     return res.status(200).json({ success: true, jobs: [] });
   }
 
-  // Normalizer helper: remove non-alphanumeric chars and lowercase
-  const normalizeToken = (s = "") =>
-    String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-
-  // prepare normalized requested skills (deduped)
+  const normalizeToken = (s = "") => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
   const requestedNorm = Array.from(new Set(skills.map((s) => normalizeToken(s)).filter(Boolean)));
-  console.log("[getAllJobs] filtering jobs by skills (normalized):", requestedNorm);
 
-  // Fetch candidate jobs (non-expired with non-empty skills array)
-  const candidateJobs = await Job.find({ expired: false, skills: { $exists: true, $ne: [] } }).lean();
+  const now = new Date();
 
-  // Filter in JS with flexible substring rules:
-  // match if any requestedNorm is substring of any jobSkillNorm OR vice versa
+  const candidateJobs = await Job.find({
+    expired: false,
+    startDate: { $lte: now },
+    endDate: { $gte: now },
+    skills: { $exists: true, $ne: [] },
+  }).lean();
+
+  let appliedJobIdSet = new Set();
+  let currentUserIdStr = null;
+  try {
+    if (req.user && req.user._id && req.user.role !== "Employer") {
+      currentUserIdStr = String(req.user._id);
+      const appliedRecords = await Application.find({ "applicantID.user": req.user._id }).select("job").lean();
+      for (const rec of appliedRecords) {
+        if (rec && rec.job) appliedJobIdSet.add(String(rec.job));
+      }
+    }
+  } catch (e) {
+    console.warn("[getAllJobs] failed to fetch user's applied jobs:", e);
+  }
+
   const matched = [];
   for (const job of candidateJobs) {
     if (!job.skills || !Array.isArray(job.skills) || job.skills.length === 0) continue;
 
-    // normalize each job skill
-    const jobSkillNorms = job.skills
-      .map((s) => normalizeToken(s))
-      .filter(Boolean);
+    if (req.user && req.user.role !== "Employer") {
+      if (appliedJobIdSet.has(String(job._id))) continue;
+      if (Array.isArray(job.applicants) && currentUserIdStr) {
+        const applicantsNormalized = job.applicants.map((a) => String(a)).filter(Boolean);
+        if (applicantsNormalized.includes(currentUserIdStr)) continue;
+      }
+    }
 
-    // if any requested skill intersects by substring -> include job
-    const anyMatch = requestedNorm.some((rq) =>
-      jobSkillNorms.some((js) => js.includes(rq) || rq.includes(js))
-    );
-
+    const jobSkillNorms = job.skills.map((s) => normalizeToken(s)).filter(Boolean);
+    const anyMatch = requestedNorm.some((rq) => jobSkillNorms.some((js) => js.includes(rq) || rq.includes(js)));
     if (anyMatch) matched.push(job);
   }
-
-  console.log(`[getAllJobs] matched ${matched.length} jobs for skills=${requestedNorm.join(",")}`);
 
   return res.status(200).json({ success: true, jobs: matched });
 });
 
 /**
  * POST /api/v1/job/post
- * - Only employers allowed (existing role check)
- * - Enforce presence of at least one skill (skills can be sent as array or comma-separated string)
+ * Employers can post jobs with timings and companyName
  */
 export const postJob = catchAsyncErrors(async (req, res, next) => {
   const { role } = req.user;
@@ -110,15 +114,16 @@ export const postJob = catchAsyncErrors(async (req, res, next) => {
     fixedSalary,
     salaryFrom,
     salaryTo,
-    skills // optional in original; we'll validate below
+    skills,
+    companyName,
+    startDate,
+    endDate,
   } = req.body;
 
-  // Basic required fields check
-  if (!title || !description || !category || !country || !city || !location) {
-    return next(new ErrorHandler("Please provide full job details.", 400));
+  if (!title || !description || !category || !country || !city || !location || !companyName || !startDate || !endDate) {
+    return next(new ErrorHandler("Please provide full job details including company and timings.", 400));
   }
 
-  // Salary validation
   if ((!salaryFrom || !salaryTo) && !fixedSalary) {
     return next(new ErrorHandler("Please either provide fixed salary or ranged salary.", 400));
   }
@@ -127,10 +132,7 @@ export const postJob = catchAsyncErrors(async (req, res, next) => {
     return next(new ErrorHandler("Cannot Enter Fixed and Ranged Salary together.", 400));
   }
 
-  // Process skills into an array regardless of input shape, and normalize (trim)
   const processedSkills = normalizeSkillsInput(skills);
-
-  // Enforce at least one skill
   if (!processedSkills.length) {
     return next(new ErrorHandler("Please provide at least one skill for this job.", 400));
   }
@@ -140,6 +142,7 @@ export const postJob = catchAsyncErrors(async (req, res, next) => {
   const job = await Job.create({
     title,
     description,
+    companyName,
     category,
     country,
     city,
@@ -147,8 +150,10 @@ export const postJob = catchAsyncErrors(async (req, res, next) => {
     fixedSalary,
     salaryFrom,
     salaryTo,
+    startDate,
+    endDate,
     postedBy,
-    skills: processedSkills
+    skills: processedSkills,
   });
 
   res.status(200).json({
@@ -158,24 +163,15 @@ export const postJob = catchAsyncErrors(async (req, res, next) => {
   });
 });
 
-/**
- * GET /api/v1/job/getmyjobs
- */
 export const getMyJobs = catchAsyncErrors(async (req, res, next) => {
   const { role } = req.user;
   if (role === "Job Seeker") {
     return next(new ErrorHandler("Job Seeker not allowed to access this resource.", 400));
   }
   const myJobs = await Job.find({ postedBy: req.user._id });
-  res.status(200).json({
-    success: true,
-    myJobs,
-  });
+  res.status(200).json({ success: true, myJobs });
 });
 
-/**
- * Update job
- */
 export const updateJob = catchAsyncErrors(async (req, res, next) => {
   const { role } = req.user;
   if (role === "Job Seeker") {
@@ -187,7 +183,6 @@ export const updateJob = catchAsyncErrors(async (req, res, next) => {
     return next(new ErrorHandler("OOPS! Job not found.", 404));
   }
 
-  // If skills are being updated, normalize them before applying
   if (req.body.skills) {
     req.body.skills = normalizeSkillsInput(req.body.skills);
   }
@@ -197,16 +192,9 @@ export const updateJob = catchAsyncErrors(async (req, res, next) => {
     runValidators: true,
     useFindAndModify: false,
   });
-  res.status(200).json({
-    success: true,
-    message: "Job Updated!",
-    job,
-  });
+  res.status(200).json({ success: true, message: "Job Updated!", job });
 });
 
-/**
- * Delete job
- */
 export const deleteJob = catchAsyncErrors(async (req, res, next) => {
   const { role } = req.user;
   if (role === "Job Seeker") {
@@ -218,14 +206,12 @@ export const deleteJob = catchAsyncErrors(async (req, res, next) => {
     return next(new ErrorHandler("OOPS! Job not found.", 404));
   }
   await job.deleteOne();
-  res.status(200).json({
-    success: true,
-    message: "Job Deleted!",
-  });
+  res.status(200).json({ success: true, message: "Job Deleted!" });
 });
 
 /**
- * GET single job
+ * GET /api/v1/job/:id
+ * Get single job details and auto-mark expired if endDate passed
  */
 export const getSingleJob = catchAsyncErrors(async (req, res, next) => {
   const { id } = req.params;
@@ -234,11 +220,49 @@ export const getSingleJob = catchAsyncErrors(async (req, res, next) => {
     if (!job) {
       return next(new ErrorHandler("Job not found.", 404));
     }
-    res.status(200).json({
-      success: true,
-      job,
-    });
+
+    const now = new Date();
+    if (job.endDate && job.endDate < now) {
+      job.expired = true;
+      await job.save();
+    }
+
+    res.status(200).json({ success: true, job });
   } catch (error) {
     return next(new ErrorHandler(`Invalid ID / CastError`, 404));
   }
+});
+
+/**
+ * POST /api/v1/job/apply/:id
+ */
+export const applyToJob = catchAsyncErrors(async (req, res, next) => {
+  const userId = req.user && req.user._id;
+  const jobId = req.params.id;
+
+  if (!userId) {
+    return next(new ErrorHandler("User not authenticated", 401));
+  }
+
+  const jobExists = await Job.findById(jobId).select("_id endDate expired");
+  if (!jobExists) {
+    return next(new ErrorHandler("Job not found.", 404));
+  }
+
+  const now = new Date();
+  if (jobExists.expired || (jobExists.endDate && jobExists.endDate < now)) {
+    return next(new ErrorHandler("Job is closed. You cannot apply.", 400));
+  }
+
+  const updated = await Job.findOneAndUpdate(
+    { _id: jobId, applicants: { $ne: userId } },
+    { $push: { applicants: userId } },
+    { new: true }
+  );
+
+  if (!updated) {
+    return res.status(400).json({ success: false, message: "You have already applied to this job." });
+  }
+
+  return res.status(200).json({ success: true, message: "Applied successfully.", job: updated });
 });

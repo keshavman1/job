@@ -3,8 +3,8 @@ import mongoose from "mongoose";
 import dotenv from "dotenv";
 dotenv.config();
 
-const MONGO_URI = process.env.MONGO_URI || process.env.DB_URL || "mongodb://127.0.0.1:27017/kesh";
-const DB_NAME = process.env.DB_NAME || "kesh";
+const MONGO_URI = process.env.MONGO_URI || process.env.DB_URL || "mongodb://127.0.0.1:27017/abc";
+const DB_NAME = process.env.DB_NAME || "abc";
 
 const dbConnection = async () => {
   try {

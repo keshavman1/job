@@ -1,0 +1,21 @@
+User Name,jobseeker
+User Email,jobseeker@gmail.com
+Date,2025-09-14T13:27:11.852Z
+
+Question Id,Answer
+q1,React
+q2,MongoDB
+q3,Django
+q4,Java
+q5,Independently
+q6,Work Overtime
+q7,Very
+q8,SME
+q9,On-site
+q10,Moderate
+
+Skills Selected,React; MongoDB; Django; Java
+Matched Job Count,1
+
+Matched Jobs (id,title,company,requiredSkills)
+68c6c299c9776d7c275581ad,software eng,,react|node

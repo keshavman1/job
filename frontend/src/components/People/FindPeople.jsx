@@ -293,36 +293,23 @@ export default function FindPeople() {
         </main>
 
         <aside className="people-sidebar">
-          <div className="sidebar-card">
-            <h3>Messages</h3>
-            <div className="sidebar-sub">Recent conversations</div>
-
-            {conversations.length === 0 ? (
-              <div className="muted small">No conversations yet. Connect and start chatting.</div>
-            ) : (
-              <ul className="conv-list">
-                {conversations.map((c, i) => {
-                  const u = c.user || c;
-                  const unread = u && unreadMap[u._id];
-                  return (
-                    <li key={u._id || i} className="conv-item" onClick={() => openChat(u)}>
-                      <div className="conv-left">
-                        <div className="conv-avatar">
-                          {u.profilePhotoPath ? <img src={u.profilePhotoPath} alt={u.name} /> : <div className="initial">{(u.name || "U").charAt(0).toUpperCase()}</div>}
-                        </div>
-                      </div>
-                      <div className="conv-body">
-                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                          <div className="conv-name">{u.name}</div>
-                          {unread ? <span className="unread-dot" /> : null}
-                        </div>
-                        <div className="conv-preview">{lastMessagePreview(c)}</div>
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
+          <div className="sidebar-card connected-card">
+            <h3>Connected</h3>
+            <div className="grid-connected">
+              {users
+                .filter((u) => (statusMap[u._id] || "none") === "accepted")
+                .slice(0, 8)
+                .map((u) => (
+                  <div className="connected-tile" key={u._id} onClick={() => openChat(u)}>
+                    <div className="tile-avatar">{(u.name || "U").charAt(0).toUpperCase()}</div>
+                    <div className="tile-name">{u.name}</div>
+                    {unreadMap[u._id] ? <span className="unread-dot small" /> : null}
+                  </div>
+                ))}
+              {users.filter((u) => (statusMap[u._id] || "none") === "accepted").length === 0 && (
+                <div className="muted small">No connected users yet.</div>
+              )}
+            </div>
           </div>
 
           <div className="sidebar-card">
@@ -353,7 +340,66 @@ export default function FindPeople() {
                 })}
             </div>
           </div>
+
+          <div className="sidebar-card">
+            <h3>Messages</h3>
+            <div className="muted small">Recent conversations</div>
+
+            {conversations.length === 0 ? (
+              <div className="muted small">No conversations yet. Connect and start chatting.</div>
+            ) : (
+              <ul className="conv-list">
+                {conversations.map((c, i) => {
+                  const u = c.user || c;
+                  const unread = u && unreadMap[u._id];
+                  return (
+                    <li key={u._id || i} className="conv-item" onClick={() => openChat(u)}>
+                      <div className="conv-left">
+                        <div className="conv-avatar">
+                          {u.profilePhotoPath ? <img src={u.profilePhotoPath} alt={u.name} /> : <div className="initial">{(u.name || "U").charAt(0).toUpperCase()}</div>}
+                        </div>
+                      </div>
+                      <div className="conv-body">
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          <div className="conv-name">{u.name}</div>
+                          {unread ? <span className="unread-dot" /> : null}
+                        </div>
+                        <div className="conv-preview">{lastMessagePreview(c)}</div>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
         </aside>
+      </div>
+
+      {/* Floating compact chat bar bottom-right */}
+      <div className="floating-chat-bar" role="button" aria-label="Open chat">
+        <div className="fc-header" onClick={() => (conversations.length ? openChat(conversations[0].user || conversations[0]) : null)}>
+          <div className="fc-avatar">💬</div>
+          <div className="fc-title">Messages</div>
+          {Object.values(unreadMap).some(Boolean) ? <div className="fc-badge" /> : null}
+        </div>
+
+        <div className="fc-list">
+          {conversations.slice(0, 5).map((c, i) => {
+            const u = c.user || c;
+            return (
+              <div key={u._id || i} className="fc-item" onClick={() => openChat(u)}>
+                <div className="fc-item-left">
+                  <div className="fc-item-avatar">{(u.name || "U").charAt(0).toUpperCase()}</div>
+                </div>
+                <div className="fc-item-body">
+                  <div className="fc-item-name">{u.name}</div>
+                  <div className="fc-item-preview">{lastMessagePreview(c)}</div>
+                </div>
+                {unreadMap[u._id] ? <span className="unread-dot small" /> : null}
+              </div>
+            );
+          })}
+        </div>
       </div>
 
       <ChatDrawer open={chatOpen} onClose={closeChat} otherUser={activeUser} apiBase={API_BASE} />

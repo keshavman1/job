@@ -10,15 +10,14 @@ import User from "../models/userSchema.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Helper: ensure reports directory under backend/uploads/reports exists and return it
+// ensure reports folder exists and return it
 const ensureReportsFolder = () => {
-  // Use __dirname so path is always relative to backend/controllers and not process.cwd()
   const reportsDir = path.join(__dirname, "..", "uploads", "reports");
   if (!fs.existsSync(reportsDir)) fs.mkdirSync(reportsDir, { recursive: true });
   return reportsDir;
 };
 
-// CSV generator that writes to backend/uploads/reports reliably
+// CSV generator
 const generateCSVReport = async ({ user, quiz, matchedJobs }) => {
   const reportsDir = ensureReportsFolder();
   const timestamp = Date.now();
@@ -51,17 +50,16 @@ const generateCSVReport = async ({ user, quiz, matchedJobs }) => {
   const content = lines.join("\n");
   await fs.promises.writeFile(filePath, content, "utf8");
 
-  // Build public URL path (frontend will prefix with backend host if needed)
+  // public path — frontend should prefix with backend origin if needed
   const reportUrlPath = `/static/uploads/reports/${fileName}`;
 
-  // Helpful console log so you can see exactly where the file was written and the URL to fetch
   console.log("Quiz report written:", filePath);
   console.log("Quiz report public path:", reportUrlPath);
 
   return { filePath, reportUrlPath };
 };
 
-// normalize incoming answers (same as you had)
+// normalization helpers (kept from your version)
 const normalizeAnswers = (raw) => {
   if (!raw) return [];
 
@@ -117,12 +115,11 @@ const normalizeSkills = (raw) => {
   return [];
 };
 
-// Basic normalization used for matching (lowercase, trim, remove punctuation/spaces except +)
 const normalizeForMatch = (s = "") =>
   String(s || "")
     .trim()
     .toLowerCase()
-    .replace(/[^a-z0-9+]/g, ""); // Node.js -> nodejs, C++ -> c++
+    .replace(/[^a-z0-9+]/g, "");
 
 /**
  * Controller: takeQuiz
@@ -139,7 +136,7 @@ export const takeQuiz = catchAsyncErrors(async (req, res, next) => {
     const answers = normalizeAnswers(rawAnswers);
     const skillsSelected = normalizeSkills(rawSkills);
 
-    // Deduplicate answers (keep first occurrence)
+    // dedupe answers
     const seenQ = new Set();
     const dedupedAnswers = [];
     for (const item of answers) {
@@ -158,17 +155,16 @@ export const takeQuiz = catchAsyncErrors(async (req, res, next) => {
       }
     }
 
-    // create audit
+    // create quiz result record
     const qr = await QuizResult.create({
       user: req.user._id,
       answers: dedupedAnswers,
       skillsSelected,
     });
 
-    // Build normalized skill set for matching
+    // prepare normalized set used for matching
     const normalizedUserSkills = (skillsSelected || []).map((s) => normalizeForMatch(s)).filter(Boolean);
 
-    // If no skills provided by frontend, try to detect from answers (best-effort)
     if (!normalizedUserSkills.length) {
       const detected = dedupedAnswers.map((a) => a.answer).filter(Boolean);
       detected.forEach((d) => {
@@ -177,22 +173,33 @@ export const takeQuiz = catchAsyncErrors(async (req, res, next) => {
       });
     }
 
-    // Load all jobs and match by normalized skills
-    const jobsRaw = await Job.find({ expired: false }).lean();
+    // ---- STRICT active-job query using your schema's fields ----
+    const now = new Date();
+
+    // We require:
+    //  - expired === false
+    //  - startDate <= now
+    //  - endDate >= now
+    // This matches how the frontend shows active jobs.
+    const jobsRaw = await Job.find({
+      expired: false,
+      startDate: { $lte: now },
+      endDate: { $gte: now },
+    }).lean();
+
+    // Filter matched jobs by skills
     const matchedJobs = jobsRaw.filter((job) => {
       const jobSkills = Array.isArray(job.skills) ? job.skills : [];
       const normJobSkills = jobSkills.map((s) => normalizeForMatch(s)).filter(Boolean);
-      // any intersection -> match
       return normJobSkills.some((js) => normalizedUserSkills.includes(js));
     });
 
-    // Save quiz summary
+    // persist summary & user flags
     qr.matchCount = matchedJobs.length;
     qr.matchedJobIds = matchedJobs.map((j) => j._id);
     qr.details = { matchedAt: new Date().toISOString() };
     await qr.save();
 
-    // persist to user
     await User.findByIdAndUpdate(
       req.user._id,
       {
@@ -204,12 +211,11 @@ export const takeQuiz = catchAsyncErrors(async (req, res, next) => {
       { new: true }
     );
 
-    // write CSV to backend/uploads/reports (reliable path)
+    // write CSV
     const { filePath, reportUrlPath } = await generateCSVReport({ user: req.user, quiz: qr, matchedJobs });
 
-    // log exact disk path and public URL for debugging
-    console.log("Quiz report written to (disk):", filePath);
-    console.log("Quiz report available at (public path):", reportUrlPath);
+    console.log("Quiz matched jobs count:", matchedJobs.length);
+    console.log("Matched job IDs:", matchedJobs.map((j) => j._id));
 
     return res.status(200).json({
       success: true,
@@ -238,8 +244,15 @@ export const quizReport = catchAsyncErrors(async (req, res, next) => {
     const qr = await QuizResult.findOne({ user: req.user._id }).sort({ createdAt: -1 });
     if (!qr) return res.status(200).json({ success: true, message: "No quiz taken yet.", report: null });
 
+    const now = new Date();
     const normSkills = (qr.skillsSelected || []).map((s) => normalizeForMatch(s));
-    const jobsRaw = await Job.find({ expired: false }).lean();
+
+    const jobsRaw = await Job.find({
+      expired: false,
+      startDate: { $lte: now },
+      endDate: { $gte: now },
+    }).lean();
+
     const matchedJobs = jobsRaw.filter((job) => {
       const jobSkills = Array.isArray(job.skills) ? job.skills : [];
       const normJobSkills = jobSkills.map((s) => normalizeForMatch(s)).filter(Boolean);

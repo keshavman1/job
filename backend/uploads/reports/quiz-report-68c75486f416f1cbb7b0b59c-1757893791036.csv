@@ -1,0 +1,30 @@
+User Name,jobseeker7
+User Email,jobseeker7@gmail.com
+Date,2025-09-14T23:49:51.036Z
+
+Question Id,Answer
+q1,React
+q2,MongoDB
+q3,Node.js
+q4,C++
+q5,Independently
+q6,Plan & Deliver
+q7,Very
+q8,Startup
+q9,Remote
+q10,Fast
+
+Skills Selected,React; MongoDB; Node.js; C++
+Matched Job Count,10
+
+Matched Jobs (id,title,company,requiredSkills)
+68c6c299c9776d7c275581ad,software eng,,react|node
+68c6cf810683b651fdd6c23c,sde,infosys,react
+68c6cfbf0683b651fdd6c308,akjshfb,infosys,React
+68c6d32fb5440c58896a9390,sde,zycus,React
+68c6d48fb5440c58896a9451,akjsbfdka,infosys,React
+68c6d5c9b5440c58896a95b6,sde,zycus,React
+68c6d78ec3584bfec1d30628,sde,meta,React
+68c70d8f5cd2240ba4efeec0,sde,Infosys,React|Mongodb
+68c7153e5cd2240ba4eff335,sde,infosys,React|mongoldb
+68c715725cd2240ba4eff33a,spd eme,zycus,React

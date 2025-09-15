@@ -30,9 +30,16 @@ const applicationSchema = new mongoose.Schema(
 
     // resume: supports both cloudinary meta (public_id, url) and local path/originalName
     resume: {
-      public_id: { type: String, default: null },      // kept for compatibility (cloudinary)
-      url: { type: String, default: "" },               // could be cloud url OR local path (/uploads/...)
-      originalName: { type: String, default: "" },      // original filename
+      public_id: { type: String, default: null }, // kept for compatibility (cloudinary)
+      url: { type: String, default: "" }, // could be cloud url OR local path (/uploads/...)
+      originalName: { type: String, default: "" }, // original filename
+    },
+
+    // Reference to job for which this application was made (NEW)
+    job: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Job",
+      required: [true, "Associated job is required."],
     },
 
     applicantID: {
@@ -72,6 +79,12 @@ const applicationSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+/**
+ * Compound unique index prevents a user from applying more than once to the same job:
+ * uniqueness on (applicantID.user + job)
+ */
+applicationSchema.index({ "applicantID.user": 1, job: 1 }, { unique: true });
 
 export const Application =
   mongoose.models.Application || mongoose.model("Application", applicationSchema);
